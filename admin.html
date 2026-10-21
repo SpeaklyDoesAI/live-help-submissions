@@ -25,11 +25,16 @@
     </section>
 
     <section id="appView" hidden>
+      <div id="listError" class="error" role="alert" hidden></div>
       <div class="toolbar">
-        <div></div>
+        <div class="filters" id="tabs">
+          <button data-tab="new" class="active">New <span class="count"></span></button>
+          <button data-tab="call">Call List <span class="count"></span></button>
+          <button data-tab="not_good">Not Good <span class="count"></span></button>
+          <button data-tab="removed">Removed <span class="count"></span></button>
+        </div>
         <div><span class="sub" id="who"></span> <button id="signOut">Sign out</button></div>
       </div>
-      <div id="listError" class="error" role="alert" hidden></div>
       <div id="noAccess" class="card" hidden>This account doesn't have admin access.</div>
       <div class="table-wrap" id="tableWrap" hidden>
         <table>
@@ -42,6 +47,8 @@
 
   <dialog id="detail">
     <div class="head"><h3>Submission</h3><button id="closeDetail" aria-label="Close">✕</button></div>
+    <div id="detailError" class="error" role="alert" hidden></div>
+    <div class="actions" id="detailActions"></div>
     <dl id="detailList"></dl>
   </dialog>
 
@@ -53,9 +60,10 @@
     const FIELDS = window.FIELDS.filter(f => f.key);
     const $ = id => document.getElementById(id);
     let all = [];
+    let tab = 'new';
 
     const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
-    const date = d => new Date(d).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+    const date = d => d ? new Date(d).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }) : '';
     const phone = s => { const d = String(s ?? '').replace(/\D/g, ''); return d.length === 10 ? `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}` : (s ?? ''); };
     const d = r => r.data || {};
 
@@ -68,8 +76,24 @@
       return v;
     }
 
-    // Table columns: [heading, row => html]
-    const COLUMNS = [
+    // ---- Tabs ----
+    const inTab = (r, t) => t === 'removed' ? r.removed_at != null : r.removed_at == null && r.status === t;
+
+    function sorted(rows) {
+      const newest = (a, b) => new Date(b.created_at) - new Date(a.created_at);
+      return tab === 'call' ? rows.sort((a, b) => (a.called - b.called) || newest(a, b)) : rows.sort(newest);
+    }
+
+    function updateCounts() {
+      document.querySelectorAll('#tabs button').forEach(b => {
+        b.querySelector('.count').textContent = `(${all.filter(r => inTab(r, b.dataset.tab)).length})`;
+      });
+    }
+
+    // ---- Table columns: [heading, row => html] ----
+    const updatedMeta = r => r.updated_at ? `<span class="sub meta">Updated ${esc(date(r.updated_at))}${r.updated_by ? ' by ' + esc(r.updated_by) : ''}</span>` : '<span class="sub meta"></span>';
+
+    const BASE_COLUMNS = [
       ['Date', r => esc(date(r.created_at))],
       ['Member', r => esc(d(r).member_name)],
       ['Address', r => esc([d(r).street_address, d(r).city, d(r).state, d(r).postal_code].filter(Boolean).join(', '))],
@@ -80,47 +104,157 @@
       ['Plan', r => esc(d(r).plan)],
     ];
 
-    $('headRow').innerHTML = COLUMNS.map(([h]) => `<th>${esc(h)}</th>`).join('');
+    const CALL_COLUMNS = [
+      ...BASE_COLUMNS.slice(0, 5),
+      ['Called', r => `<label class="check inline"><input type="checkbox" data-called ${r.called ? 'checked' : ''}> Called</label>
+        <span class="sub called-at">${r.called ? esc(date(r.called_at)) : ''}</span>`],
+      ['Notes', r => `<textarea class="notes" data-notes rows="2">${esc(r.notes)}</textarea>
+        <span class="sub saved" hidden>Saved</span>${updatedMeta(r)}`, 'wrapcell'],
+    ];
 
+    function render() {
+      updateCounts();
+      const cols = tab === 'call' ? CALL_COLUMNS : BASE_COLUMNS;
+      $('headRow').innerHTML = cols.map(([h]) => `<th>${esc(h)}</th>`).join('');
+      const rows = sorted(all.filter(r => inTab(r, tab)));
+      $('rows').innerHTML = rows.map(r => `
+        <tr data-id="${esc(r.id)}">${cols.map(([, cell, cls]) => `<td${cls ? ` class="${cls}"` : ''}>${cell(r)}</td>`).join('')}</tr>`).join('')
+        || `<tr><td colspan="${cols.length}" class="sub">No leads here.</td></tr>`;
+    }
+
+    $('tabs').addEventListener('click', e => {
+      const b = e.target.closest('button[data-tab]');
+      if (!b) return;
+      tab = b.dataset.tab;
+      document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('active', x === b));
+      render();
+    });
+
+    // ---- Saving ----
+    function showErr(msg) {
+      $('listError').textContent = msg;
+      $('listError').hidden = !msg;
+      if (msg) window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    // Updates one lead and returns the saved row, or null after showing the error.
+    async function save(id, changes, errTarget = 'listError') {
+      $('listError').hidden = true;
+      $('detailError').hidden = true;
+      const { data, error } = await sb.from('live_help_submissions').update(changes).eq('id', id).select();
+      const msg = error ? error.message : !data || !data.length ? "Couldn't save: this account can't update leads." : '';
+      if (msg) {
+        if (errTarget === 'detailError') { $('detailError').textContent = msg; $('detailError').hidden = false; }
+        else showErr(msg);
+        return null;
+      }
+      const row = data[0];
+      all = all.map(r => r.id === row.id ? row : r);
+      updateCounts();
+      return row;
+    }
+
+    const rowOf = el => all.find(x => String(x.id) === el.closest('tr[data-id]').dataset.id);
+
+    // Call List: Called checkbox saves immediately; it updates in place so the list doesn't jump.
+    $('rows').addEventListener('change', async e => {
+      if (!e.target.matches('[data-called]')) return;
+      const box = e.target;
+      const tr = box.closest('tr');
+      box.disabled = true;
+      const row = await save(rowOf(box).id, { called: box.checked });
+      box.disabled = false;
+      if (!row) { box.checked = !box.checked; return; }
+      tr.querySelector('.called-at').textContent = row.called ? date(row.called_at) : '';
+      tr.querySelector('.meta').outerHTML = updatedMeta(row);
+    });
+
+    // Call List: Notes save when the box loses focus.
+    $('rows').addEventListener('focusout', async e => {
+      if (!e.target.matches('[data-notes]')) return;
+      const area = e.target;
+      const tr = area.closest('tr');
+      const current = rowOf(area);
+      if ((current.notes ?? '') === area.value) return;
+      const row = await save(current.id, { notes: area.value });
+      if (!row) return;
+      tr.querySelector('.meta').outerHTML = updatedMeta(row);
+      const saved = tr.querySelector('.saved');
+      saved.hidden = false;
+      clearTimeout(saved._t);
+      saved._t = setTimeout(() => { saved.hidden = true; }, 2000);
+    });
+
+    // ---- Detail view ----
+    let detailRow = null;
+
+    function detailActions(r) {
+      if (r.removed_at != null) return [['Restore', { removed_at: null }]];
+      const acts = [];
+      if (r.status !== 'call') acts.push(['Add to Call List', { status: 'call' }]);
+      if (r.status !== 'not_good') acts.push(['Not Good', { status: 'not_good' }]);
+      if (r.status !== 'new') acts.push(['Move back to New', { status: 'new' }]);
+      acts.push(['Remove', { removed_at: 'now' }, 'Remove this lead?']);
+      return acts;
+    }
+
+    function openDetail(r) {
+      detailRow = r;
+      $('detailError').hidden = true;
+      const acts = detailActions(r);
+      $('detailActions').innerHTML = acts.map(([label], i) => `<button data-act="${i}"${label === 'Remove' ? ' class="danger"' : ''}>${esc(label)}</button>`).join('');
+      $('detailActions')._acts = acts;
+
+      const items = [['Submitted', date(r.created_at)],
+        ...FIELDS.filter(f => !f.showIf || d(r)[f.showIf.key] === f.showIf.equals).map(f => [f.label, format(f, d(r)[f.key])]),
+        ['Called', r.called ? `Yes, ${date(r.called_at)}` : 'No'],
+        ['Notes', r.notes],
+        ['Last updated', r.updated_at ? `${date(r.updated_at)}${r.updated_by ? ' by ' + r.updated_by : ''}` : '']];
+      $('detailList').innerHTML = items.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v) || '<span class="sub">—</span>'}</dd>`).join('');
+      $('detail').showModal();
+    }
+
+    $('detailActions').addEventListener('click', async e => {
+      const b = e.target.closest('button[data-act]');
+      if (!b || !detailRow) return;
+      const [, changes, confirmMsg] = $('detailActions')._acts[b.dataset.act];
+      if (confirmMsg && !confirm(confirmMsg)) return;
+      const payload = { ...changes };
+      if (payload.removed_at === 'now') payload.removed_at = new Date().toISOString();
+      $('detailActions').querySelectorAll('button').forEach(x => x.disabled = true);
+      const row = await save(detailRow.id, payload, 'detailError');
+      $('detailActions').querySelectorAll('button').forEach(x => x.disabled = false);
+      if (!row) return;
+      $('detail').close();
+      render();
+    });
+
+    $('rows').addEventListener('click', e => {
+      if (e.target.closest('input, textarea, label')) return;
+      const tr = e.target.closest('tr[data-id]');
+      if (!tr) return;
+      const r = rowOf(tr);
+      if (r) openDetail(r);
+    });
+    $('closeDetail').addEventListener('click', () => $('detail').close());
+    $('detail').addEventListener('click', e => { if (e.target === $('detail')) $('detail').close(); });
+
+    // ---- Auth ----
     function showLogin() { $('loginView').hidden = false; $('appView').hidden = true; }
 
     async function showApp(session) {
       $('loginView').hidden = true;
       $('appView').hidden = false;
       $('who').textContent = session.user.email;
-      $('listError').hidden = true;
+      showErr('');
       const { data, error } = await sb.from('live_help_submissions').select('*').order('created_at', { ascending: false });
-      if (error) {
-        $('listError').textContent = error.message;
-        $('listError').hidden = false;
-        return;
-      }
+      if (error) { showErr(error.message); return; }
       all = data || [];
       $('noAccess').hidden = all.length > 0;
       $('tableWrap').hidden = all.length === 0;
+      $('tabs').hidden = all.length === 0;
       render();
     }
-
-    function render() {
-      $('rows').innerHTML = all.map(r => `
-        <tr data-id="${esc(r.id)}">${COLUMNS.map(([, cell]) => `<td>${cell(r)}</td>`).join('')}</tr>`).join('');
-    }
-
-    function openDetail(r) {
-      const items = [['Submitted', date(r.created_at)],
-        ...FIELDS.filter(f => !f.showIf || d(r)[f.showIf.key] === f.showIf.equals).map(f => [f.label, format(f, d(r)[f.key])])];
-      $('detailList').innerHTML = items.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v) || '<span class="sub">—</span>'}</dd>`).join('');
-      $('detail').showModal();
-    }
-
-    $('rows').addEventListener('click', e => {
-      const tr = e.target.closest('tr[data-id]');
-      if (!tr) return;
-      const r = all.find(x => String(x.id) === tr.dataset.id);
-      if (r) openDetail(r);
-    });
-    $('closeDetail').addEventListener('click', () => $('detail').close());
-    $('detail').addEventListener('click', e => { if (e.target === $('detail')) $('detail').close(); });
 
     $('loginForm').addEventListener('submit', async e => {
       e.preventDefault();

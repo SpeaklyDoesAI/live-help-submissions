@@ -161,3 +161,16 @@ label.check input { width: auto; margin-top: 4px; }
 label a { color: var(--accent-dark); }
 input[type="checkbox"][aria-invalid="true"] { outline: 2px solid var(--bad); }
 .hint { color: var(--muted); font-size: .82rem; margin-top: 4px; }
+
+/* Lead management */
+.filters .count { font-weight: 400; opacity: .75; }
+dialog .actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 20px 0; }
+dialog .error { margin: 14px 20px 0; }
+button.danger { color: var(--bad); border-color: var(--bad); }
+button.danger:hover { background: var(--bad-bg); }
+td.wrapcell { white-space: normal; min-width: 260px; }
+textarea.notes { min-height: 0; font-size: .9rem; padding: 6px 8px; }
+label.check.inline { display: inline-flex; gap: 6px; align-items: center; font-weight: 600; }
+label.check.inline input { margin: 0; }
+.called-at, .meta { display: block; }
+.saved { color: var(--ok); font-weight: 600; }
