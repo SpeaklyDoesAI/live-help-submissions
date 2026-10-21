@@ -30,6 +30,7 @@
         <div class="filters" id="tabs">
           <button data-tab="new" class="active">New <span class="count"></span></button>
           <button data-tab="call">Call List <span class="count"></span></button>
+          <button data-tab="called">Called <span class="count"></span></button>
           <button data-tab="not_good">Not Good <span class="count"></span></button>
           <button data-tab="removed">Removed <span class="count"></span></button>
         </div>
@@ -77,11 +78,18 @@
     }
 
     // ---- Tabs ----
-    const inTab = (r, t) => t === 'removed' ? r.removed_at != null : r.removed_at == null && r.status === t;
+    function inTab(r, t) {
+      if (t === 'removed') return r.removed_at != null;
+      if (r.removed_at != null) return false;
+      if (t === 'call') return r.status === 'call' && !r.called;
+      if (t === 'called') return r.status === 'call' && r.called;
+      return r.status === t;
+    }
+    const isCallTab = t => t === 'call' || t === 'called';
 
     function sorted(rows) {
-      const newest = (a, b) => new Date(b.created_at) - new Date(a.created_at);
-      return tab === 'call' ? rows.sort((a, b) => (a.called - b.called) || newest(a, b)) : rows.sort(newest);
+      const key = tab === 'called' ? 'called_at' : 'created_at';
+      return rows.sort((a, b) => new Date(b[key]) - new Date(a[key]));
     }
 
     function updateCounts() {
@@ -114,7 +122,7 @@
 
     function render() {
       updateCounts();
-      const cols = tab === 'call' ? CALL_COLUMNS : BASE_COLUMNS;
+      const cols = isCallTab(tab) ? CALL_COLUMNS : BASE_COLUMNS;
       $('headRow').innerHTML = cols.map(([h]) => `<th>${esc(h)}</th>`).join('');
       const rows = sorted(all.filter(r => inTab(r, tab)));
       $('rows').innerHTML = rows.map(r => `
@@ -156,20 +164,18 @@
 
     const rowOf = el => all.find(x => String(x.id) === el.closest('tr[data-id]').dataset.id);
 
-    // Call List: Called checkbox saves immediately; it updates in place so the list doesn't jump.
+    // Call List / Called: the Called checkbox saves immediately and moves the lead to the other tab.
     $('rows').addEventListener('change', async e => {
       if (!e.target.matches('[data-called]')) return;
       const box = e.target;
-      const tr = box.closest('tr');
       box.disabled = true;
       const row = await save(rowOf(box).id, { called: box.checked });
       box.disabled = false;
       if (!row) { box.checked = !box.checked; return; }
-      tr.querySelector('.called-at').textContent = row.called ? date(row.called_at) : '';
-      tr.querySelector('.meta').outerHTML = updatedMeta(row);
+      render();
     });
 
-    // Call List: Notes save when the box loses focus.
+    // Call List / Called: Notes save when the box loses focus.
     $('rows').addEventListener('focusout', async e => {
       if (!e.target.matches('[data-notes]')) return;
       const area = e.target;
