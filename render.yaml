@@ -1,0 +1,7 @@
+services:
+  - type: web
+    runtime: static
+    name: live-help-submissions
+    plan: free
+    buildCommand: ""
+    staticPublishPath: .

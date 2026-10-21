@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Live Help Submissions Admin | Creative Owners Club</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="wrap wide">
+    <header class="brand">
+      <h1>Creative Owners Club</h1>
+      <p>Live Help Submissions Admin</p>
+    </header>
+
+    <section id="loginView" class="card login" hidden>
+      <h2>Admin Login</h2>
+      <form id="loginForm">
+        <div id="loginError" class="error" role="alert" hidden></div>
+        <div class="field"><label for="email">Email</label><input id="email" type="email" autocomplete="username" required></div>
+        <div class="field"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required></div>
+        <button type="submit" class="primary" id="loginBtn">Sign In</button>
+      </form>
+    </section>
+
+    <section id="appView" hidden>
+      <div class="toolbar">
+        <div></div>
+        <div><span class="sub" id="who"></span> <button id="signOut">Sign out</button></div>
+      </div>
+      <div id="listError" class="error" role="alert" hidden></div>
+      <div id="noAccess" class="card" hidden>This account doesn't have admin access.</div>
+      <div class="table-wrap" id="tableWrap" hidden>
+        <table>
+          <thead><tr id="headRow"></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="detail">
+    <div class="head"><h3>Submission</h3><button id="closeDetail" aria-label="Close">✕</button></div>
+    <dl id="detailList"></dl>
+  </dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+  <script src="config.js"></script>
+  <script src="fields.js"></script>
+  <script>
+    const sb = supabase.createClient(window.SUPABASE_URL, window.SUPABASE_KEY);
+    const FIELDS = window.FIELDS;
+    const $ = id => document.getElementById(id);
+    let all = [];
+
+    const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+    const date = d => new Date(d).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+    const short = s => { s = String(s ?? ''); return s.length > 80 ? s.slice(0, 80) + '…' : s; };
+    const fieldVal = (r, key) => (r.data || {})[key];
+
+    $('headRow').innerHTML = '<th>Date</th>' + FIELDS.map(f => `<th>${esc(f.label)}</th>`).join('');
+
+    function showLogin() { $('loginView').hidden = false; $('appView').hidden = true; }
+
+    async function showApp(session) {
+      $('loginView').hidden = true;
+      $('appView').hidden = false;
+      $('who').textContent = session.user.email;
+      $('listError').hidden = true;
+      const { data, error } = await sb.from('live_help_submissions').select('*').order('created_at', { ascending: false });
+      if (error) {
+        $('listError').textContent = error.message;
+        $('listError').hidden = false;
+        return;
+      }
+      all = data || [];
+      $('noAccess').hidden = all.length > 0;
+      $('tableWrap').hidden = all.length === 0;
+      render();
+    }
+
+    function render() {
+      $('rows').innerHTML = all.map(r => `
+        <tr data-id="${esc(r.id)}">
+          <td>${esc(date(r.created_at))}</td>
+          ${FIELDS.map(f => `<td>${esc(short(fieldVal(r, f.key)))}</td>`).join('')}
+        </tr>`).join('');
+    }
+
+    function openDetail(r) {
+      const items = [['Submitted', date(r.created_at)], ...FIELDS.map(f => [f.label, fieldVal(r, f.key)])];
+      $('detailList').innerHTML = items.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v) || '<span class="sub">—</span>'}</dd>`).join('');
+      $('detail').showModal();
+    }
+
+    $('rows').addEventListener('click', e => {
+      const tr = e.target.closest('tr[data-id]');
+      if (!tr) return;
+      const r = all.find(x => String(x.id) === tr.dataset.id);
+      if (r) openDetail(r);
+    });
+    $('closeDetail').addEventListener('click', () => $('detail').close());
+    $('detail').addEventListener('click', e => { if (e.target === $('detail')) $('detail').close(); });
+
+    $('loginForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      $('loginError').hidden = true;
+      $('loginBtn').disabled = true;
+      const { data, error } = await sb.auth.signInWithPassword({ email: $('email').value.trim(), password: $('password').value });
+      $('loginBtn').disabled = false;
+      if (error) { $('loginError').textContent = error.message; $('loginError').hidden = false; return; }
+      $('password').value = '';
+      showApp(data.session);
+    });
+
+    $('signOut').addEventListener('click', async () => {
+      await sb.auth.signOut();
+      all = [];
+      $('rows').innerHTML = '';
+      showLogin();
+    });
+
+    sb.auth.getSession().then(({ data }) => data.session ? showApp(data.session) : showLogin());
+  </script>
+</body>
+</html>

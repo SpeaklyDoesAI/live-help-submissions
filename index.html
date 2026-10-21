@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Help Submission | Creative Owners Club</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="wrap">
+    <header class="brand">
+      <h1>Creative Owners Club</h1>
+      <p>Live Help Submission</p>
+    </header>
+
+    <section id="resultBox" class="card result approved" hidden></section>
+
+    <form id="helpForm" novalidate>
+      <section class="card">
+        <h2>Submit a question for the Tuesday/Thursday live call</h2>
+        <div class="grid" id="fields"></div>
+      </section>
+
+      <div id="formError" class="error" role="alert" hidden></div>
+      <button type="submit" class="primary" id="submitBtn">Submit Question</button>
+    </form>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+  <script src="config.js"></script>
+  <script src="fields.js"></script>
+  <script>
+    const sb = supabase.createClient(window.SUPABASE_URL, window.SUPABASE_KEY);
+    const FIELDS = window.FIELDS;
+    const form = document.getElementById('helpForm');
+    const errBox = document.getElementById('formError');
+    const resultBox = document.getElementById('resultBox');
+    const btn = document.getElementById('submitBtn');
+
+    const el = (tag, cls, text) => {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    };
+
+    // ---- Build the form from FIELDS ----
+    const INPUT_TYPES = { text: 'text', email: 'email', phone: 'tel' };
+    const AUTOCOMPLETE = { email: 'email', phone: 'tel' };
+
+    function buildField(f) {
+      const box = el('div', f.type === 'textarea' ? 'full' : '');
+      const label = el('label', null, f.label);
+      label.htmlFor = f.key;
+      if (f.required) label.append(' ', el('span', 'req', '*'));
+
+      let input;
+      if (f.type === 'textarea') {
+        input = el('textarea');
+      } else if (f.type === 'select') {
+        input = el('select');
+        input.append(new Option('Select…', ''));
+        for (const o of f.options || []) input.append(new Option(o, o));
+      } else {
+        input = el('input');
+        input.type = INPUT_TYPES[f.type] || 'text';
+        if (AUTOCOMPLETE[f.type]) input.autocomplete = AUTOCOMPLETE[f.type];
+      }
+      input.id = input.name = f.key;
+      input.required = !!f.required;
+      box.append(label, input);
+      return box;
+    }
+
+    document.getElementById('fields').replaceChildren(...FIELDS.map(buildField));
+
+    // ---- Field validation ----
+    const val = key => form.elements[key].value.trim();
+    const emailOk = s => /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(s);
+    const phoneOk = s => {
+      let d = s.replace(/\D/g, '');
+      if (d.length === 11 && d[0] === '1') d = d.slice(1);
+      return /^[2-9]\d{9}$/.test(d);
+    };
+
+    function fieldMessage(f) {
+      const v = val(f.key);
+      if (!v) return f.required ? 'This field is required.' : '';
+      if (f.type === 'email' && !emailOk(v)) return 'Enter a valid email address.';
+      if (f.type === 'phone' && !phoneOk(v)) return 'Enter a valid 10-digit US phone number.';
+      return '';
+    }
+
+    function setFieldError(key, msg) {
+      const input = form.elements[key];
+      const box = input.closest('.grid > div');
+      let err = box.querySelector('.field-error');
+      if (!err) {
+        err = el('div', 'field-error');
+        err.id = key + '_error';
+        box.append(err);
+      }
+      err.textContent = msg;
+      err.hidden = !msg;
+      input.setAttribute('aria-invalid', msg ? 'true' : 'false');
+      if (msg) input.setAttribute('aria-describedby', err.id); else input.removeAttribute('aria-describedby');
+    }
+
+    const validateField = f => {
+      const msg = fieldMessage(f);
+      setFieldError(f.key, msg);
+      return !msg;
+    };
+
+    // Check a field when the user leaves it; clear its error as soon as it's fixed.
+    for (const f of FIELDS) {
+      const input = form.elements[f.key];
+      input.addEventListener('blur', () => {
+        if (!val(f.key) && input.dataset.touched !== '1') return;
+        input.dataset.touched = '1';
+        validateField(f);
+      });
+      input.addEventListener('change', () => { input.dataset.touched = '1'; validateField(f); });
+      input.addEventListener('input', () => { if (input.getAttribute('aria-invalid') === 'true') validateField(f); });
+    }
+
+    function showError(msg) {
+      errBox.textContent = msg;
+      errBox.hidden = false;
+      errBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function resetForm() {
+      form.reset();
+      form.querySelectorAll('.field-error').forEach(e => { e.textContent = ''; e.hidden = true; });
+      form.querySelectorAll('[aria-invalid]').forEach(i => i.setAttribute('aria-invalid', 'false'));
+      form.querySelectorAll('[data-touched]').forEach(i => delete i.dataset.touched);
+      errBox.hidden = true;
+      resultBox.hidden = true;
+      form.hidden = false;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function showThanks(name) {
+      const box = el('div');
+      box.append(el('p', 'lead', `Thanks ${name}! Your question has been submitted for the next live call.`));
+      const again = el('button', 'primary', 'Submit another');
+      again.type = 'button';
+      again.addEventListener('click', resetForm);
+      box.append(again);
+      resultBox.replaceChildren(box);
+      resultBox.hidden = false;
+      form.hidden = true;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errBox.hidden = true;
+
+      const invalid = FIELDS.filter(f => !validateField(f));
+      if (invalid.length) {
+        const first = form.elements[invalid[0].key];
+        first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        first.focus({ preventScroll: true });
+        return;
+      }
+
+      const p = {};
+      for (const f of FIELDS) {
+        const v = val(f.key);
+        p[f.key] = v === '' ? null : v;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Submitting…';
+      try {
+        const { data, error } = await sb.rpc('submit_live_help', { p });
+        if (error) throw error;
+        const r = Array.isArray(data) ? data[0] : data;
+        if (!r || r.result !== 'received') throw new Error('Unexpected response from server.');
+        showThanks(p.name);
+      } catch (err) {
+        showError(err.message || String(err));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Submit Question';
+      }
+    });
+  </script>
+</body>
+</html>
