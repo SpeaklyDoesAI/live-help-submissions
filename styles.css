@@ -151,3 +151,13 @@ dialog dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .login { max-width: 400px; margin: 40px auto; }
 .login .field { margin-bottom: 14px; }
+
+/* Live help form */
+.intro { margin: -6px 0 14px; padding: 10px 12px; background: #fff4e6; border-left: 4px solid var(--accent); border-radius: 8px; font-weight: 600; }
+.money.suffix span { left: auto; right: 12px; }
+.money.suffix input { padding-left: 12px; padding-right: 30px; }
+label.check { display: flex; gap: 10px; align-items: flex-start; margin: 0; }
+label.check input { width: auto; margin-top: 4px; }
+label a { color: var(--accent-dark); }
+input[type="checkbox"][aria-invalid="true"] { outline: 2px solid var(--bad); }
+.hint { color: var(--muted); font-size: .82rem; margin-top: 4px; }

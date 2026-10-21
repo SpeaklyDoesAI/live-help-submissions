@@ -16,22 +16,19 @@
     <section id="resultBox" class="card result approved" hidden></section>
 
     <form id="helpForm" novalidate>
-      <section class="card">
-        <h2>Submit a question for the Tuesday/Thursday live call</h2>
-        <div class="grid" id="fields"></div>
-      </section>
-
+      <div id="sections"></div>
       <div id="formError" class="error" role="alert" hidden></div>
-      <button type="submit" class="primary" id="submitBtn">Submit Question</button>
+      <button type="submit" class="primary" id="submitBtn">Submit Lead</button>
     </form>
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@googlemaps/js-api-loader@1.16.8/dist/index.min.js"></script>
   <script src="config.js"></script>
   <script src="fields.js"></script>
   <script>
     const sb = supabase.createClient(window.SUPABASE_URL, window.SUPABASE_KEY);
-    const FIELDS = window.FIELDS;
+    const FIELDS = window.FIELDS.filter(f => f.key);
     const form = document.getElementById('helpForm');
     const errBox = document.getElementById('formError');
     const resultBox = document.getElementById('resultBox');
@@ -45,14 +42,42 @@
     };
 
     // ---- Build the form from FIELDS ----
-    const INPUT_TYPES = { text: 'text', email: 'email', phone: 'tel' };
+    const INPUT_TYPES = { text: 'text', email: 'email', phone: 'tel', money: 'text', percent: 'text' };
     const AUTOCOMPLETE = { email: 'email', phone: 'tel' };
 
+    function labelText(f) {
+      if (!f.link) return [f.label];
+      const [before, after] = f.label.split(f.link.text);
+      const a = el('a', null, f.link.text);
+      a.href = f.link.href;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      return [before, a, after];
+    }
+
     function buildField(f) {
-      const box = el('div', f.type === 'textarea' ? 'full' : '');
-      const label = el('label', null, f.label);
+      const box = el('div', f.full || f.type === 'textarea' || f.type === 'checkbox' ? 'full' : '');
+      box.dataset.key = f.key;
+      const label = el('label');
       label.htmlFor = f.key;
+
+      if (f.type === 'checkbox') {
+        const input = el('input');
+        input.type = 'checkbox';
+        input.id = input.name = f.key;
+        input.required = !!f.required;
+        label.className = 'check';
+        const text = el('span');
+        text.append(...labelText(f));
+        if (f.required) text.append(' ', el('span', 'req', '*'));
+        label.append(input, text);
+        box.append(label);
+        return box;
+      }
+
+      label.append(...labelText(f));
       if (f.required) label.append(' ', el('span', 'req', '*'));
+      if (f.help) label.append(el('span', 'note', f.help));
 
       let input;
       if (f.type === 'textarea') {
@@ -65,30 +90,88 @@
         input = el('input');
         input.type = INPUT_TYPES[f.type] || 'text';
         if (AUTOCOMPLETE[f.type]) input.autocomplete = AUTOCOMPLETE[f.type];
+        if (f.type === 'money' || f.type === 'percent') input.inputMode = 'decimal';
       }
       input.id = input.name = f.key;
       input.required = !!f.required;
-      box.append(label, input);
+
+      box.append(label);
+      if (f.type === 'money' || f.type === 'percent') {
+        const wrap = el('div', f.type === 'money' ? 'money' : 'money suffix');
+        wrap.append(el('span', null, f.type === 'money' ? '$' : '%'), input);
+        box.append(wrap);
+      } else {
+        box.append(input);
+      }
       return box;
     }
 
-    document.getElementById('fields').replaceChildren(...FIELDS.map(buildField));
+    function buildSections() {
+      const root = document.getElementById('sections');
+      let grid = null;
+      for (const item of window.FIELDS) {
+        if (item.section) {
+          const card = el('section', 'card');
+          card.append(el('h2', null, item.section));
+          if (item.intro) card.append(el('p', 'intro', item.intro));
+          grid = el('div', 'grid');
+          if (item.addressPicker) {
+            const search = el('div', 'full');
+            search.id = 'addressSearch';
+            search.hidden = true;
+            const lab = el('label', null, 'Search address');
+            lab.id = 'addressSearchLabel';
+            const slot = el('div');
+            slot.id = 'addressSearchSlot';
+            search.append(lab, slot, el('div', 'hint', 'Pick an address to fill in the fields below. You can still edit them.'));
+            grid.append(search);
+          }
+          card.append(grid);
+          root.append(card);
+        } else {
+          grid.append(buildField(item));
+        }
+      }
+    }
+    buildSections();
 
-    // ---- Field validation ----
-    const val = key => form.elements[key].value.trim();
+    // ---- Conditional fields ----
+    const isShown = f => !f.showIf || form.elements[f.showIf.key].value === f.showIf.equals;
+
+    function applyVisibility() {
+      for (const f of FIELDS) {
+        if (!f.showIf) continue;
+        const shown = isShown(f);
+        form.querySelector(`[data-key="${f.key}"]`).hidden = !shown;
+        if (!shown) setFieldError(f.key, '');
+      }
+    }
+
+    // ---- Field validation (mirrors the rules enforced in submit_live_help) ----
+    const val = key => {
+      const input = form.elements[key];
+      return input.type === 'checkbox' ? input.checked : input.value.trim();
+    };
     const emailOk = s => /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(s);
     const phoneOk = s => {
       let d = s.replace(/\D/g, '');
       if (d.length === 11 && d[0] === '1') d = d.slice(1);
       return /^[2-9]\d{9}$/.test(d);
     };
+    const numText = s => s.replace(/[$,%\s]/g, '');
+    const numOk = s => /^\d+(\.\d+)?$/.test(numText(s));
 
     function fieldMessage(f) {
+      if (!isShown(f)) return '';
       const v = val(f.key);
+      if (f.type === 'checkbox') return f.required && !v ? 'Please check this box.' : '';
       if (!v) return f.required ? 'This field is required.' : '';
       if (f.type === 'email' && !emailOk(v)) return 'Enter a valid email address.';
       if (f.type === 'phone' && !phoneOk(v)) return 'Enter a valid 10-digit US phone number.';
-      return '';
+      if (f.type === 'money' && !numOk(v)) return 'Enter a dollar amount.';
+      if (f.type === 'percent' && !numOk(v)) return 'Enter a percentage, e.g. 3.5';
+      const r = f.check ? f.check(v) : true;
+      return r === true ? '' : r;
     }
 
     function setFieldError(key, msg) {
@@ -120,10 +203,71 @@
         input.dataset.touched = '1';
         validateField(f);
       });
-      input.addEventListener('change', () => { input.dataset.touched = '1'; validateField(f); });
+      input.addEventListener('change', () => {
+        input.dataset.touched = '1';
+        validateField(f);
+        applyVisibility();
+      });
       input.addEventListener('input', () => { if (input.getAttribute('aria-invalid') === 'true') validateField(f); });
     }
+    applyVisibility();
 
+    // ---- Google Place Autocomplete (Places API New) ----
+    let PlaceAutocompleteElement = null;
+
+    function fillAddress(place) {
+      const comps = place.addressComponents || [];
+      const get = (type, short) => {
+        const c = comps.find(c => c.types.includes(type));
+        return c ? (short ? c.shortText : c.longText) : '';
+      };
+      const street = [get('street_number'), get('route', true)].filter(Boolean).join(' ');
+      const city = get('locality') || get('sublocality_level_1') || get('postal_town') || get('neighborhood');
+      const state = get('administrative_area_level_1', true);
+      const zip = get('postal_code');
+
+      form.elements.street_address.value = street;
+      form.elements.city.value = city;
+      form.elements.state.value = [...form.elements.state.options].some(o => o.value === state) ? state : '';
+      form.elements.postal_code.value = zip;
+      for (const f of FIELDS.filter(f => ['street_address', 'city', 'state', 'postal_code'].includes(f.key))) {
+        form.elements[f.key].dataset.touched = '1';
+        validateField(f);
+      }
+    }
+
+    function mountAutocomplete() {
+      if (!PlaceAutocompleteElement) return;
+      const pac = new PlaceAutocompleteElement({ includedRegionCodes: ['us'] });
+      pac.setAttribute('aria-labelledby', 'addressSearchLabel');
+      pac.setAttribute('placeholder', 'Start typing the property address');
+      const onPlace = async place => {
+        try {
+          await place.fetchFields({ fields: ['addressComponents'] });
+          fillAddress(place);
+        } catch (err) {
+          console.error('Place details failed', err);
+        }
+      };
+      // Current event name, plus the older one for API versions that still use it.
+      pac.addEventListener('gmp-select', e => e.placePrediction && onPlace(e.placePrediction.toPlace()));
+      pac.addEventListener('gmp-placeselect', e => e.place && onPlace(e.place));
+      document.getElementById('addressSearchSlot').replaceChildren(pac);
+    }
+
+    (async () => {
+      try {
+        const loader = new google.maps.plugins.loader.Loader({ apiKey: window.GOOGLE_MAPS_KEY, version: 'weekly' });
+        ({ PlaceAutocompleteElement } = await loader.importLibrary('places'));
+        mountAutocomplete();
+        document.getElementById('addressSearch').hidden = false;
+      } catch (err) {
+        // The form still works without the picker; addresses can be typed in.
+        console.error('Address search unavailable', err);
+      }
+    })();
+
+    // ---- Submit ----
     function showError(msg) {
       errBox.textContent = msg;
       errBox.hidden = false;
@@ -135,6 +279,8 @@
       form.querySelectorAll('.field-error').forEach(e => { e.textContent = ''; e.hidden = true; });
       form.querySelectorAll('[aria-invalid]').forEach(i => i.setAttribute('aria-invalid', 'false'));
       form.querySelectorAll('[data-touched]').forEach(i => delete i.dataset.touched);
+      applyVisibility();
+      mountAutocomplete();
       errBox.hidden = true;
       resultBox.hidden = true;
       form.hidden = false;
@@ -143,7 +289,7 @@
 
     function showThanks(name) {
       const box = el('div');
-      box.append(el('p', 'lead', `Thanks ${name}! Your question has been submitted for the next live call.`));
+      box.append(el('p', 'lead', `Thanks ${name}! Your lead has been submitted for the next live call.`));
       const again = el('button', 'primary', 'Submit another');
       again.type = 'button';
       again.addEventListener('click', resetForm);
@@ -168,8 +314,11 @@
 
       const p = {};
       for (const f of FIELDS) {
+        if (!isShown(f)) continue;
         const v = val(f.key);
-        p[f.key] = v === '' ? null : v;
+        if (f.type === 'checkbox') p[f.key] = v;
+        else if (f.type === 'money' || f.type === 'percent') p[f.key] = v === '' ? null : Number(numText(v));
+        else p[f.key] = v === '' ? null : v;
       }
 
       btn.disabled = true;
@@ -179,12 +328,12 @@
         if (error) throw error;
         const r = Array.isArray(data) ? data[0] : data;
         if (!r || r.result !== 'received') throw new Error('Unexpected response from server.');
-        showThanks(p.name);
+        showThanks(p.member_name);
       } catch (err) {
         showError(err.message || String(err));
       } finally {
         btn.disabled = false;
-        btn.textContent = 'Submit Question';
+        btn.textContent = 'Submit Lead';
       }
     });
   </script>

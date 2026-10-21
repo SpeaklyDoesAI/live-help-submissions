@@ -50,16 +50,37 @@
   <script src="fields.js"></script>
   <script>
     const sb = supabase.createClient(window.SUPABASE_URL, window.SUPABASE_KEY);
-    const FIELDS = window.FIELDS;
+    const FIELDS = window.FIELDS.filter(f => f.key);
     const $ = id => document.getElementById(id);
     let all = [];
 
     const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
     const date = d => new Date(d).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
-    const short = s => { s = String(s ?? ''); return s.length > 80 ? s.slice(0, 80) + '…' : s; };
-    const fieldVal = (r, key) => (r.data || {})[key];
+    const phone = s => { const d = String(s ?? '').replace(/\D/g, ''); return d.length === 10 ? `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}` : (s ?? ''); };
+    const d = r => r.data || {};
 
-    $('headRow').innerHTML = '<th>Date</th>' + FIELDS.map(f => `<th>${esc(f.label)}</th>`).join('');
+    function format(f, v) {
+      if (v == null || v === '') return '';
+      if (f.type === 'money') return '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 });
+      if (f.type === 'percent') return Number(v) + '%';
+      if (f.type === 'phone') return phone(v);
+      if (f.type === 'checkbox') return v === true || v === 'true' ? 'Yes' : 'No';
+      return v;
+    }
+
+    // Table columns: [heading, row => html]
+    const COLUMNS = [
+      ['Date', r => esc(date(r.created_at))],
+      ['Member', r => esc(d(r).member_name)],
+      ['Address', r => esc([d(r).street_address, d(r).city, d(r).state, d(r).postal_code].filter(Boolean).join(', '))],
+      ['Calling', r => `${esc(d(r).contact_type)}: ${esc(d(r).contact_name)}<br><span class="sub">${esc(phone(d(r).contact_phone))}</span>`],
+      ['Call Day', r => esc(d(r).call_day)],
+      ['Mortgage', r => esc(d(r).has_mortgage)],
+      ['Open To', r => esc(d(r).open_to)],
+      ['Plan', r => esc(d(r).plan)],
+    ];
+
+    $('headRow').innerHTML = COLUMNS.map(([h]) => `<th>${esc(h)}</th>`).join('');
 
     function showLogin() { $('loginView').hidden = false; $('appView').hidden = true; }
 
@@ -82,14 +103,12 @@
 
     function render() {
       $('rows').innerHTML = all.map(r => `
-        <tr data-id="${esc(r.id)}">
-          <td>${esc(date(r.created_at))}</td>
-          ${FIELDS.map(f => `<td>${esc(short(fieldVal(r, f.key)))}</td>`).join('')}
-        </tr>`).join('');
+        <tr data-id="${esc(r.id)}">${COLUMNS.map(([, cell]) => `<td>${cell(r)}</td>`).join('')}</tr>`).join('');
     }
 
     function openDetail(r) {
-      const items = [['Submitted', date(r.created_at)], ...FIELDS.map(f => [f.label, fieldVal(r, f.key)])];
+      const items = [['Submitted', date(r.created_at)],
+        ...FIELDS.filter(f => !f.showIf || d(r)[f.showIf.key] === f.showIf.equals).map(f => [f.label, format(f, d(r)[f.key])])];
       $('detailList').innerHTML = items.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v) || '<span class="sub">—</span>'}</dd>`).join('');
       $('detail').showModal();
     }
