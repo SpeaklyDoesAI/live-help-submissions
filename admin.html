@@ -27,13 +27,7 @@
     <section id="appView" hidden>
       <div id="listError" class="error" role="alert" hidden></div>
       <div class="toolbar">
-        <div class="filters" id="tabs">
-          <button data-tab="new" class="active">New <span class="count"></span></button>
-          <button data-tab="call">Call List <span class="count"></span></button>
-          <button data-tab="called">Called <span class="count"></span></button>
-          <button data-tab="not_good">Not Good <span class="count"></span></button>
-          <button data-tab="removed">Removed <span class="count"></span></button>
-        </div>
+        <div class="filters" id="tabs"></div>
         <div><span class="sub" id="who"></span> <button id="signOut">Sign out</button></div>
       </div>
       <div id="noAccess" class="card" hidden>This account doesn't have admin access.</div>
@@ -61,80 +55,80 @@
     const FIELDS = window.FIELDS.filter(f => f.key);
     const $ = id => document.getElementById(id);
     let all = [];
-    let tab = 'new';
+    let tab = null;
 
     const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
     const date = d => d ? new Date(d).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }) : '';
     const phone = s => { const d = String(s ?? '').replace(/\D/g, ''); return d.length === 10 ? `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}` : (s ?? ''); };
     const d = r => r.data || {};
+    const ymd = t => `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+    // 'YYYY-MM-DD' -> 'Tue, Oct 27' (read as a local date, not UTC)
+    const callDay = s => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || '');
+      return m ? new Date(+m[1], m[2] - 1, +m[3]).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : (s || '');
+    };
 
     function format(f, v) {
       if (v == null || v === '') return '';
       if (f.type === 'money') return '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 });
       if (f.type === 'percent') return Number(v) + '%';
       if (f.type === 'phone') return phone(v);
+      if (f.type === 'date') return callDay(v);
       if (f.type === 'checkbox') return v === true || v === 'true' ? 'Yes' : 'No';
       return v;
     }
 
-    // ---- Tabs ----
-    function inTab(r, t) {
-      if (t === 'removed') return r.removed_at != null;
-      if (r.removed_at != null) return false;
-      if (t === 'call') return r.status === 'call' && !r.called;
-      if (t === 'called') return r.status === 'call' && r.called;
-      return r.status === t;
-    }
-    const isCallTab = t => t === 'call' || t === 'called';
+    // ---- Tabs: one per call date (upcoming first, then past newest first), then No date and Removed ----
+    const tabOf = r => r.removed_at != null ? 'removed' : (d(r).call_date || 'none');
 
-    function sorted(rows) {
-      const key = tab === 'called' ? 'called_at' : 'created_at';
-      return rows.sort((a, b) => new Date(b[key]) - new Date(a[key]));
+    function tabList() {
+      const today = ymd(new Date());
+      const dates = [...new Set(all.map(tabOf))].filter(t => t !== 'removed' && t !== 'none');
+      const upcoming = dates.filter(t => t >= today).sort();
+      const past = dates.filter(t => t < today).sort().reverse();
+      const tabs = [...upcoming, ...past].map(t => [t, callDay(t)]);
+      if (all.some(r => tabOf(r) === 'none')) tabs.push(['none', 'No date']);
+      tabs.push(['removed', 'Removed']);
+      return tabs;
     }
 
-    function updateCounts() {
-      document.querySelectorAll('#tabs button').forEach(b => {
-        b.querySelector('.count').textContent = `(${all.filter(r => inTab(r, b.dataset.tab)).length})`;
-      });
+    function renderTabs() {
+      const tabs = tabList();
+      if (!tabs.some(([t]) => t === tab)) tab = tabs[0][0];
+      $('tabs').innerHTML = tabs.map(([t, label]) => {
+        const n = all.filter(r => tabOf(r) === t).length;
+        return `<button data-tab="${esc(t)}"${t === tab ? ' class="active"' : ''}>${esc(label)} <span class="count">(${n})</span></button>`;
+      }).join('');
     }
 
     // ---- Table columns: [heading, row => html] ----
-    const updatedMeta = r => r.updated_at ? `<span class="sub meta">Updated ${esc(date(r.updated_at))}${r.updated_by ? ' by ' + esc(r.updated_by) : ''}</span>` : '<span class="sub meta"></span>';
+    const DEAL_CLASS = { 'Mortgage takeover': 'takeover', 'Seller financing': 'financing', 'Cash': 'cash' };
+    const dealBadge = r => d(r).deal_path ? `<span class="badge ${DEAL_CLASS[d(r).deal_path] || ''}">${esc(d(r).deal_path)}</span>` : '';
 
-    const BASE_COLUMNS = [
-      ['Date', r => esc(date(r.created_at))],
+    const COLUMNS = [
+      ['Submitted', r => esc(date(r.created_at))],
       ['Member', r => esc(d(r).member_name)],
       ['Address', r => esc([d(r).street_address, d(r).city, d(r).state, d(r).postal_code].filter(Boolean).join(', '))],
       ['Calling', r => `${esc(d(r).contact_type)}: ${esc(d(r).contact_name)}<br><span class="sub">${esc(phone(d(r).contact_phone))}</span>`],
-      ['Call Day', r => esc(d(r).call_day)],
-      ['Mortgage', r => esc(d(r).has_mortgage)],
-      ['Open To', r => esc(d(r).open_to)],
+      ['Deal', dealBadge],
       ['Plan', r => esc(d(r).plan)],
-    ];
-
-    const CALL_COLUMNS = [
-      ...BASE_COLUMNS.slice(0, 5),
       ['Called', r => `<label class="check inline"><input type="checkbox" data-called ${r.called ? 'checked' : ''}> Called</label>
         <span class="sub called-at">${r.called ? esc(date(r.called_at)) : ''}</span>`],
-      ['Notes', r => `<textarea class="notes" data-notes rows="2">${esc(r.notes)}</textarea>
-        <span class="sub saved" hidden>Saved</span>${updatedMeta(r)}`, 'wrapcell'],
     ];
 
     function render() {
-      updateCounts();
-      const cols = isCallTab(tab) ? CALL_COLUMNS : BASE_COLUMNS;
-      $('headRow').innerHTML = cols.map(([h]) => `<th>${esc(h)}</th>`).join('');
-      const rows = sorted(all.filter(r => inTab(r, tab)));
+      renderTabs();
+      $('headRow').innerHTML = COLUMNS.map(([h]) => `<th>${esc(h)}</th>`).join('');
+      const rows = all.filter(r => tabOf(r) === tab).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
       $('rows').innerHTML = rows.map(r => `
-        <tr data-id="${esc(r.id)}">${cols.map(([, cell, cls]) => `<td${cls ? ` class="${cls}"` : ''}>${cell(r)}</td>`).join('')}</tr>`).join('')
-        || `<tr><td colspan="${cols.length}" class="sub">No leads here.</td></tr>`;
+        <tr data-id="${esc(r.id)}">${COLUMNS.map(([, cell]) => `<td>${cell(r)}</td>`).join('')}</tr>`).join('')
+        || `<tr><td colspan="${COLUMNS.length}" class="sub">No leads here.</td></tr>`;
     }
 
     $('tabs').addEventListener('click', e => {
       const b = e.target.closest('button[data-tab]');
       if (!b) return;
       tab = b.dataset.tab;
-      document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('active', x === b));
       render();
     });
 
@@ -158,13 +152,12 @@
       }
       const row = data[0];
       all = all.map(r => r.id === row.id ? row : r);
-      updateCounts();
       return row;
     }
 
     const rowOf = el => all.find(x => String(x.id) === el.closest('tr[data-id]').dataset.id);
 
-    // Call List / Called: the Called checkbox saves immediately and moves the lead to the other tab.
+    // The Called checkbox saves immediately.
     $('rows').addEventListener('change', async e => {
       if (!e.target.matches('[data-called]')) return;
       const box = e.target;
@@ -175,46 +168,21 @@
       render();
     });
 
-    // Call List / Called: Notes save when the box loses focus.
-    $('rows').addEventListener('focusout', async e => {
-      if (!e.target.matches('[data-notes]')) return;
-      const area = e.target;
-      const tr = area.closest('tr');
-      const current = rowOf(area);
-      if ((current.notes ?? '') === area.value) return;
-      const row = await save(current.id, { notes: area.value });
-      if (!row) return;
-      tr.querySelector('.meta').outerHTML = updatedMeta(row);
-      const saved = tr.querySelector('.saved');
-      saved.hidden = false;
-      clearTimeout(saved._t);
-      saved._t = setTimeout(() => { saved.hidden = true; }, 2000);
-    });
-
     // ---- Detail view ----
     let detailRow = null;
-
-    function detailActions(r) {
-      if (r.removed_at != null) return [['Restore', { removed_at: null }]];
-      const acts = [];
-      if (r.status !== 'call') acts.push(['Add to Call List', { status: 'call' }]);
-      if (r.status !== 'not_good') acts.push(['Not Good', { status: 'not_good' }]);
-      if (r.status !== 'new') acts.push(['Move back to New', { status: 'new' }]);
-      acts.push(['Remove', { removed_at: 'now' }, 'Remove this lead?']);
-      return acts;
-    }
 
     function openDetail(r) {
       detailRow = r;
       $('detailError').hidden = true;
-      const acts = detailActions(r);
-      $('detailActions').innerHTML = acts.map(([label], i) => `<button data-act="${i}"${label === 'Remove' ? ' class="danger"' : ''}>${esc(label)}</button>`).join('');
-      $('detailActions')._acts = acts;
+      $('detailActions').innerHTML = r.removed_at != null
+        ? '<button data-act="restore">Restore</button>'
+        : '<button data-act="remove" class="danger">Remove</button>';
 
+      const get = k => d(r)[k];
       const items = [['Submitted', date(r.created_at)],
-        ...FIELDS.filter(f => !f.showIf || d(r)[f.showIf.key] === f.showIf.equals).map(f => [f.label, format(f, d(r)[f.key])]),
+        ...FIELDS.filter(f => !f.showIf || f.showIf(get)).map(f => [f.short || f.label, format(f, get(f.key))]),
+        ['Deal path', get('deal_path')],
         ['Called', r.called ? `Yes, ${date(r.called_at)}` : 'No'],
-        ['Notes', r.notes],
         ['Last updated', r.updated_at ? `${date(r.updated_at)}${r.updated_by ? ' by ' + r.updated_by : ''}` : '']];
       $('detailList').innerHTML = items.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v) || '<span class="sub">—</span>'}</dd>`).join('');
       $('detail').showModal();
@@ -223,20 +191,18 @@
     $('detailActions').addEventListener('click', async e => {
       const b = e.target.closest('button[data-act]');
       if (!b || !detailRow) return;
-      const [, changes, confirmMsg] = $('detailActions')._acts[b.dataset.act];
-      if (confirmMsg && !confirm(confirmMsg)) return;
-      const payload = { ...changes };
-      if (payload.removed_at === 'now') payload.removed_at = new Date().toISOString();
-      $('detailActions').querySelectorAll('button').forEach(x => x.disabled = true);
-      const row = await save(detailRow.id, payload, 'detailError');
-      $('detailActions').querySelectorAll('button').forEach(x => x.disabled = false);
+      const remove = b.dataset.act === 'remove';
+      if (remove && !confirm('Remove this lead?')) return;
+      b.disabled = true;
+      const row = await save(detailRow.id, { removed_at: remove ? new Date().toISOString() : null }, 'detailError');
+      b.disabled = false;
       if (!row) return;
       $('detail').close();
       render();
     });
 
     $('rows').addEventListener('click', e => {
-      if (e.target.closest('input, textarea, label')) return;
+      if (e.target.closest('input, label')) return;
       const tr = e.target.closest('tr[data-id]');
       if (!tr) return;
       const r = rowOf(tr);

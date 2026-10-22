@@ -42,14 +42,16 @@
     };
 
     // ---- Build the form from FIELDS ----
-    const INPUT_TYPES = { text: 'text', email: 'email', phone: 'tel', money: 'text', percent: 'text' };
+    const INPUT_TYPES = { text: 'text', email: 'email', phone: 'tel', money: 'text', percent: 'text', number: 'text', date: 'date' };
     const AUTOCOMPLETE = { email: 'email', phone: 'tel' };
+    const NUMERIC = ['money', 'percent', 'number'];
+    const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-    function labelText(f) {
-      if (!f.link) return [f.label];
-      const [before, after] = f.label.split(f.link.text);
-      const a = el('a', null, f.link.text);
-      a.href = f.link.href;
+    function labelText({ text, link }) {
+      if (!link) return [text];
+      const [before, after] = text.split(link.text);
+      const a = el('a', null, link.text);
+      a.href = link.href;
       a.target = '_blank';
       a.rel = 'noopener';
       return [before, a, after];
@@ -66,21 +68,50 @@
         input.type = 'checkbox';
         input.id = input.name = f.key;
         input.required = !!f.required;
-        label.className = 'check';
+        label.className = f.list ? 'check big' : 'check';
         const text = el('span');
-        text.append(...labelText(f));
+        text.append(...labelText({ text: f.label, link: f.link }));
         if (f.required) text.append(' ', el('span', 'req', '*'));
+        if (f.list) {
+          const ol = el('ol');
+          for (const item of f.list) {
+            const li = el('li');
+            li.append(...labelText(item));
+            ol.append(li);
+          }
+          text.append(ol);
+        }
         label.append(input, text);
         box.append(label);
         return box;
       }
 
-      label.append(...labelText(f));
+      label.append(...labelText({ text: f.label, link: f.link }));
       if (f.required) label.append(' ', el('span', 'req', '*'));
       if (f.help) label.append(el('span', 'note', f.help));
 
       let input;
-      if (f.type === 'textarea') {
+      if (f.type === 'buttons') {
+        // A hidden input holds the value so the rest of the form treats it like any other field.
+        input = el('input');
+        input.type = 'hidden';
+        input.id = input.name = f.key;
+        const group = el('div', 'choice');
+        group.setAttribute('role', 'group');
+        for (const o of f.options) {
+          const b = el('button', null, o);
+          b.type = 'button';
+          b.dataset.value = o;
+          b.setAttribute('aria-pressed', 'false');
+          b.addEventListener('click', () => {
+            input.value = o;
+            input.dispatchEvent(new Event('change'));
+          });
+          group.append(b);
+        }
+        box.append(label, input, group);
+        return box;
+      } else if (f.type === 'textarea') {
         input = el('textarea');
       } else if (f.type === 'select') {
         input = el('select');
@@ -90,7 +121,8 @@
         input = el('input');
         input.type = INPUT_TYPES[f.type] || 'text';
         if (AUTOCOMPLETE[f.type]) input.autocomplete = AUTOCOMPLETE[f.type];
-        if (f.type === 'money' || f.type === 'percent') input.inputMode = 'decimal';
+        if (NUMERIC.includes(f.type)) input.inputMode = 'decimal';
+        if (f.type === 'date') input.min = ymd(new Date());
       }
       input.id = input.name = f.key;
       input.required = !!f.required;
@@ -136,15 +168,30 @@
     buildSections();
 
     // ---- Conditional fields ----
-    const isShown = f => !f.showIf || form.elements[f.showIf.key].value === f.showIf.equals;
+    const isShown = f => !f.showIf || f.showIf(key => form.elements[key].value);
 
+    // Show the pressed button in each Yes/No style group.
+    function syncChoices() {
+      form.querySelectorAll('.choice').forEach(group => {
+        const v = group.closest('[data-key]').querySelector('input').value;
+        group.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.value === v)));
+      });
+    }
+
+    // Fields are in order, so clearing an earlier hidden field also hides the branches that depend on it.
     function applyVisibility() {
       for (const f of FIELDS) {
         if (!f.showIf) continue;
         const shown = isShown(f);
         form.querySelector(`[data-key="${f.key}"]`).hidden = !shown;
-        if (!shown) setFieldError(f.key, '');
+        if (!shown) {
+          const input = form.elements[f.key];
+          if (input.type === 'checkbox') input.checked = false; else input.value = '';
+          delete input.dataset.touched;
+          setFieldError(f.key, '');
+        }
       }
+      syncChoices();
     }
 
     // ---- Field validation (mirrors the rules enforced in submit_live_help) ----
@@ -170,6 +217,7 @@
       if (f.type === 'phone' && !phoneOk(v)) return 'Enter a valid 10-digit US phone number.';
       if (f.type === 'money' && !numOk(v)) return 'Enter a dollar amount.';
       if (f.type === 'percent' && !numOk(v)) return 'Enter a percentage, e.g. 3.5';
+      if (f.type === 'number' && !numOk(v)) return 'Enter a number.';
       const r = f.check ? f.check(v) : true;
       return r === true ? '' : r;
     }
@@ -276,6 +324,7 @@
 
     function resetForm() {
       form.reset();
+      form.querySelectorAll('input[type="hidden"]').forEach(i => { i.value = ''; });
       form.querySelectorAll('.field-error').forEach(e => { e.textContent = ''; e.hidden = true; });
       form.querySelectorAll('[aria-invalid]').forEach(i => i.setAttribute('aria-invalid', 'false'));
       form.querySelectorAll('[data-touched]').forEach(i => delete i.dataset.touched);
@@ -306,7 +355,8 @@
 
       const invalid = FIELDS.filter(f => !validateField(f));
       if (invalid.length) {
-        const first = form.elements[invalid[0].key];
+        let first = form.elements[invalid[0].key];
+        if (first.type === 'hidden') first = first.closest('[data-key]').querySelector('button');
         first.scrollIntoView({ behavior: 'smooth', block: 'center' });
         first.focus({ preventScroll: true });
         return;
@@ -317,7 +367,7 @@
         if (!isShown(f)) continue;
         const v = val(f.key);
         if (f.type === 'checkbox') p[f.key] = v;
-        else if (f.type === 'money' || f.type === 'percent') p[f.key] = v === '' ? null : Number(numText(v));
+        else if (NUMERIC.includes(f.type)) p[f.key] = v === '' ? null : Number(numText(v));
         else p[f.key] = v === '' ? null : v;
       }
 

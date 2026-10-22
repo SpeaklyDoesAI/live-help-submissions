@@ -174,3 +174,23 @@ label.check.inline { display: inline-flex; gap: 6px; align-items: center; font-w
 label.check.inline input { margin: 0; }
 .called-at, .meta { display: block; }
 .saved { color: var(--ok); font-weight: 600; }
+
+/* Choice buttons (Yes/No and similar) */
+.choice { display: flex; flex-wrap: wrap; gap: 8px; }
+.choice button { min-width: 110px; padding: 10px 18px; font-weight: 600; }
+.choice button:hover { border-color: var(--accent); }
+.choice button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+input[aria-invalid="true"] + .choice button { border-color: var(--bad); }
+
+/* Final confirmation checkbox */
+label.check.big { padding: 14px 16px; border: 2px solid var(--border); border-radius: 10px; font-size: 1rem; cursor: pointer; }
+label.check.big:has(input:checked) { border-color: var(--accent); background: #fff4e6; }
+label.check.big input { width: 22px; height: 22px; flex: none; margin-top: 2px; accent-color: var(--accent); }
+label.check.big ol { margin: 8px 0 0; padding-left: 22px; font-weight: 400; }
+label.check.big li + li { margin-top: 4px; }
+label.check.big:has(input[aria-invalid="true"]) { border-color: var(--bad); }
+
+/* Deal path badges */
+.badge.takeover { background: #e8f0fe; color: #1a56c4; }
+.badge.financing { background: var(--ok-bg); color: var(--ok); }
+.badge.cash { background: #fff4e6; color: var(--accent-dark); }
